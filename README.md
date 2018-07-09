@@ -1,4 +1,5 @@
-1、moveToThread
+###Qt QTread 背景知识
+**1、moveToThread**
 QObject worker；
 worker.moveToThread(_thread);
 
@@ -7,12 +8,11 @@ worker.moveToThread(_thread);
 同样，如果 worker moveToThread 后，不能设置非同一线程下的 parent。
 即，对象树下的所有对象、都必须在同一线程里，否则无论是修改对象树、还是修改线程，都会失败。
 
-2、QThread 对象释放掉，但线程未必停止了。正确的停止方式：
-// 首先请求中断任务，QThread 在 run时，可能会存有多个待执行的任务，用 while 循环来一个个执行的
-// 因此，QThread 对象释放时，先请求中断 requestInterruption，run 中的 while 则判断是否有中断 
-
-```
-while(!isInterruptionRequested()) {
+**2、QThread 对象释放掉，但线程未必停止了。正确的停止方式：**
+&emsp;&emsp;首先请求中断任务，QThread 在 run时，可能会存有多个待执行的任务，用 while 循环来一个个执行的
+因此，QThread 对象释放时，先请求中断 requestInterruption，run 中的 while 则判断是否有中断 
+``` C++
+while(!isInterruptionRequested()) 
     requestInterruption();
     // 然后 发出 quit event
     quit();
@@ -21,18 +21,36 @@ while(!isInterruptionRequested()) {
 }
 ```
 
-3、	telegram 的 taskqueue， 对 task 的执行、包括结束，都是在同一个 worker 工作函数里执行的。
-    主线程生成 task，加入到 taskqueue，taskqueue 通过信号 taskadded，通知 worker 开始执行任务， worker 从 task 队列取出 task，调用 task->process()，完成后，发出 worker 的 taskFinished 信号，不在同一线程、所以 生成 event 插入到 主线程的 event loop 里，然后主动调用 QCoreApplication::processEvents()，这时候 worker 的 taskFinished 信号会被处理掉，即，一个任务 process 后，立刻 finished。
-    telegram worker的本意是，主线程添加 task 至 taskqueue ，将 task 加入到 task 列表、然后发出 taskadded 信号就结束了，work 的工作函数会被 taskadded 信号唤醒，工作函数 while 检查线程是否中断，否则从 task 列表里取出一个 task、然后 process、发出 finished 信号，再次检查线程是否中断。
-    这里的问题是，主线程可能在上个 task 还在执行的时候，如果再添加一个 task 进来、会塞 taskadded 事件到 event loop 里，那么上一个 work 工作函数在 task finish 之后、调用  QCoreApplication::processEvents() 的时候，会有两个 work 工作函数被执行，虽然 加了锁，不会循环执行相同的任务，但其实已经跑飞了。
 
+**3、实例分析**
+&emsp;&emsp;telegram 的 taskqueue， 对 task 的执行、包括结束，都是在同一个 worker 工作函数里执行的。
+&emsp;&emsp;主线程生成 task，加入到 taskqueue，taskqueue 通过信号 taskadded，通知 worker 开始执行任务， worker 从 task 队列取出 task，调用 task->process()，完成后，发出 worker 的 taskFinished 信号，不在同一线程、所以 生成 event 插入到 主线程的 event loop 里，然后主动调用 QCoreApplication::processEvents()，这时候 worker 的 taskFinished 信号会被处理掉，即，一个任务 process 后，立刻 finished。
+&emsp;&emsp; telegram worker的本意是，主线程添加 task 至 taskqueue ，将 task 加入到 task 列表、然后发出 taskadded 信号就结束了，work 的工作函数会被 taskadded 信号唤醒，工作函数 while 检查线程是否中断，否则从 task 列表里取出一个 task、然后 process、发出 finished 信号，再次检查线程是否中断。
+&emsp;&emsp;这里的问题是，主线程可能在上个 task 还在执行的时候，如果再添加一个 task 进来、会塞 taskadded 事件到 event loop 里，那么上一个 work 工作函数在 task finish 之后、调用  QCoreApplication::processEvents() 的时候，会有两个 work 工作函数被执行，虽然 加了锁，不会循环执行相同的任务，但其实已经跑飞了。
 
-一个 串行 的任务队列：
---------------------------------------------------------------------------------
+&nbsp;
+&nbsp;
+&nbsp;
+
+###一个 串行 的任务队列：
 利用 QThread run 的 event loop，来实现任务调度。
-将待执行的任务放进 FIFO 队列里->检查启动线程->发出执行任务信号->线程收到信号->从队列里读取任务->执行任务->发出任务完成信号->主线程接收任务完成信号->完成任务。
+```flow
+st=>start: 开始 
+e=>end: 结束 
+input=>inputoutput: 传入待执行任务
+op1=>operation: 将待执行的任务放进 FIFO 队列里
+op2=>operation: 检查启动线程
+op3=>operation: 发出执行任务信号
+op4=>operation: 线程收到信号
+op5=>operation: 从队列里读取任务
+op6=>operation: 执行任务
+output=>inputoutput: 发出任务完成信号
+op7=>operation: 主线程接收任务完成信号
 
+st->input->op1->op2->op3->op4->op5->op6->output->op7->e
 ```
+
+```C++ Qt
 // 任务抽象。任务执行时在子线程里，任务完成在调用线程里。
 class Task {
 public:
@@ -206,8 +224,9 @@ void TaskQueue::onTaskFinished(Task *t) {
 }
 ```
 
+&nbsp;
 
-5、可以增加一个 10 秒没有任务，则停止 thread，再有任务加进来，再启动 thread
+**可以增加一个 10 秒没有任务，则停止 thread，再有任务加进来，再启动 thread**
 注意：
 1、如何判断：10 秒没有任务在执行
 2、多线程数据同步
@@ -215,7 +234,7 @@ void TaskQueue::onTaskFinished(Task *t) {
 1、添加任务后，停止计时
 2、任务完成时，判断队列里还有没有剩余的任务，没有的话、开始计时
 
-```
+```C++ Qt
 class TaskQueue : public QObject{
     Q_OBJECT
 public:
@@ -310,26 +329,27 @@ void TaskQueue::onThreadInIdle() {
 
 
 
-并发 10 个网络请求的并行任务队列
---------------------------------------------------------------------------------
+&nbsp;
+&nbsp;
+&nbsp;
+###并发 10 个网络请求的并行任务队列
 本项目需要并发的是网络请求、包括文件的上传和下载。
+&nbsp;
+**分析：**
+1. QT 中的网络请求，只能是 main thread 且 支持并发的，等于自带 worker 和 multy thread。
+2. 因为是异步的，所以无法直接利用 QThread 的 event loop 来实现任务调度，只能自己实现。
+3. 任务队列只管调度任务，其他比如进度、结果之类的事件，由上层直接监听任务即可。
+4. 更多司职的是任务调度，甚至不太关心任务什么时候完成、成功与否。
 
-分析：
-QT 中的网络请求，只能是 main thread 且 支持并发的，等于自带 worker 和 multy thread。
-任务队列只管调度任务，其他比如进度之类的事件，由上层直接监听任务即可。
-因为是异步的，所以无法直接利用 QThread 的 event loop 来实现任务调度，只能自己实现。
-并发任务，更多司职的是任务调度，甚至不太关心任务什么时候完成、成功与否。
-
-任务调度：
+**任务调度：**
 1、新增任务，将任务保存至 id-》task map里，检查 正在执行任务 列表，如果大于等于 10 个，则放入 待执行队列 里；否则任务 id 记录到 正在执行列表、并启动任务。
 2、任务执行完成后，从 待执行队列 里取出一个任务，放入 正在执行列表 里，然后执行任务。
 
-注意点：
-1、任务的启动由 task queue 调度完成，但因为是异步任务、所以 任务 完成之后，都需要有回调通知 task queue，然后由 task queue 执行对应的 应用层回调。
-2、task queue 只是调度任务的话，那么 task queue 就不应该知道任何 任务细节，任务是否完成、任务自身知道，所以再由上层调用 finish 表示任务结束。
-3、综上，task queue 只需要启动任务。
+**注意点：**
+1. 任务的启动由 task queue 调度完成，但因为是异步任务、所以 任务 完成之后，需要通知 task queue 任务完成、可以执行下一个在排队的任务了。
+2. task queue 只需要启动任务。
 
-```
+```C++ Qt
 // async task
 class AsyncTask : public QObject {
     Q_OBJECT
@@ -445,11 +465,13 @@ void AsyncTaskQueue::cancelTask(quint64 id) {
     }
 }
 ```
+&nbsp;
+&nbsp;
+&nbsp;
+###更具普遍意义的并发任务队列
 
-更具普遍意义的并发任务队列
---------------------------------------------------------------------------------
 上述依赖 Qt 的网络请求而不需要自己创建维护多线程 和 worker，而且代码逻辑相对简单。
-但，更具普遍意义的是多线程的并发任务队列。
+但，更具普遍意义的是支持多线程的并发任务队列。
 任务队列仍然负责任务的启动，不需要知道任务执行的具体行为、以及是否完成，提供 finish 接口供任务完成后调用、形成调度闭环。
 支持多线程，并发数量取决于子线程数量。
 worker，工作者，QThread + worker 是 Qt 推荐的多线程模型，QThread 负责启停子线程、worker 负责执行任务。
@@ -459,28 +481,19 @@ TODO
 
 
 
+&nbsp;
+&nbsp;
+&nbsp;
 
 
+###为什么不用 QThreadPool + QRunnable？
+QThreadPool 虽然支持多线程，但不会启动 qt event loop、QRunnable 也不继承自 QObject，意味着 信号槽机制 不能用。即使 给 QRunnable 创建一个 QObject 派生类 成员变量用于收发信号槽，信号槽执行在哪个线程将不可控，但可以肯定不会是 QThreadPool 管理的线程。
+要解决这个问题，当然可以用信号量、互斥锁等原子操作通知其他正常 QObject，但这难道不违背 QThreadPool 的设计初衷吗？
+从 QRunnable 的源码看，它比较适合纯费时操作，比如复制文件什么的，连结果都不太方通知出来。
+这点上看，不是特别理解为什么 QThreadPool + QRunnable 不能支持信号槽。
 
-GitHUb 地址
---------------------------------------------------------------------------------
-https://github.com/JimmyJay2015/Qt-SyncWoker.git
+&nbsp;
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+> 文中代码 github https://github.com/JimmyJay2015/Qt-SyncWoker.git
 
 
