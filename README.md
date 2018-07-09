@@ -22,9 +22,9 @@ while(!isInterruptionRequested()) {
 ```
 
 3、	telegram 的 taskqueue， 对 task 的执行、包括结束，都是在同一个 worker 工作函数里执行的。
-主线程生成 task，加入到 taskqueue，taskqueue 通过信号 taskadded，通知 worker 开始执行任务， worker 从 task 队列取出 task，调用 task->process()，完成后，发出 worker 的 taskFinished 信号，不在同一线程、所以 生成 event 插入到 主线程的 event loop 里，然后主动调用 QCoreApplication::processEvents()，这时候 worker 的 taskFinished 信号会被处理掉，即，一个任务 process 后，立刻 finished。
-telegram worker的本意是，主线程添加 task 至 taskqueue ，将 task 加入到 task 列表、然后发出 taskadded 信号就结束了，work 的工作函数会被 taskadded 信号唤醒，工作函数 while 检查线程是否中断，否则从 task 列表里取出一个 task、然后 process、发出 finished 信号，再次检查线程是否中断。
-这里的问题是，主线程可能在上个 task 还在执行的时候，如果再添加一个 task 进来、会塞 taskadded 事件到 event loop 里，那么上一个 work 工作函数在 task finish 之后、调用  QCoreApplication::processEvents() 的时候，会有两个 work 工作函数被执行，虽然 加了锁，不会循环执行相同的任务，但其实已经跑飞了。
+    主线程生成 task，加入到 taskqueue，taskqueue 通过信号 taskadded，通知 worker 开始执行任务， worker 从 task 队列取出 task，调用 task->process()，完成后，发出 worker 的 taskFinished 信号，不在同一线程、所以 生成 event 插入到 主线程的 event loop 里，然后主动调用 QCoreApplication::processEvents()，这时候 worker 的 taskFinished 信号会被处理掉，即，一个任务 process 后，立刻 finished。
+    telegram worker的本意是，主线程添加 task 至 taskqueue ，将 task 加入到 task 列表、然后发出 taskadded 信号就结束了，work 的工作函数会被 taskadded 信号唤醒，工作函数 while 检查线程是否中断，否则从 task 列表里取出一个 task、然后 process、发出 finished 信号，再次检查线程是否中断。
+    这里的问题是，主线程可能在上个 task 还在执行的时候，如果再添加一个 task 进来、会塞 taskadded 事件到 event loop 里，那么上一个 work 工作函数在 task finish 之后、调用  QCoreApplication::processEvents() 的时候，会有两个 work 工作函数被执行，虽然 加了锁，不会循环执行相同的任务，但其实已经跑飞了。
 
 
 一个 串行 的任务队列：
@@ -32,6 +32,7 @@ telegram worker的本意是，主线程添加 task 至 taskqueue ，将 task 加
 利用 QThread run 的 event loop，来实现任务调度。
 将待执行的任务放进 FIFO 队列里->检查启动线程->发出执行任务信号->线程收到信号->从队列里读取任务->执行任务->发出任务完成信号->主线程接收任务完成信号->完成任务。
 
+```
 // 任务抽象。任务执行时在子线程里，任务完成在调用线程里。
 class Task {
 public:
@@ -203,6 +204,7 @@ void TaskQueue::onTaskFinished(Task *t) {
     qDebug()<< QDateTime::currentMSecsSinceEpoch()<<" TaskQueue finish task" << t->id() <<" in thread id:" << QThread::currentThreadId();
     t->finish();
 }
+```
 
 
 5、可以增加一个 10 秒没有任务，则停止 thread，再有任务加进来，再启动 thread
@@ -213,7 +215,7 @@ void TaskQueue::onTaskFinished(Task *t) {
 1、添加任务后，停止计时
 2、任务完成时，判断队列里还有没有剩余的任务，没有的话、开始计时
 
-代码：
+```
 class TaskQueue : public QObject{
     Q_OBJECT
 public:
@@ -303,7 +305,7 @@ void TaskQueue::onThreadInIdle() {
         _worker = 0;
     }
 }
-
+```
 
 
 
@@ -327,7 +329,7 @@ QT 中的网络请求，只能是 main thread 且 支持并发的，等于自带
 2、task queue 只是调度任务的话，那么 task queue 就不应该知道任何 任务细节，任务是否完成、任务自身知道，所以再由上层调用 finish 表示任务结束。
 3、综上，task queue 只需要启动任务。
 
-代码：
+```
 // async task
 class AsyncTask : public QObject {
     Q_OBJECT
@@ -442,7 +444,7 @@ void AsyncTaskQueue::cancelTask(quint64 id) {
         _allTasks[nextId]->startAsyncTask();
     }
 }
-
+```
 
 更具普遍意义的并发任务队列
 --------------------------------------------------------------------------------
