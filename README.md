@@ -11,7 +11,7 @@ worker.moveToThread(_thread);
 // 首先请求中断任务，QThread 在 run时，可能会存有多个待执行的任务，用 while 循环来一个个执行的
 // 因此，QThread 对象释放时，先请求中断 requestInterruption，run 中的 while 则判断是否有中断 
 
-···
+```
 while(!isInterruptionRequested()) {
     requestInterruption();
     // 然后 发出 quit event
@@ -19,7 +19,7 @@ while(!isInterruptionRequested()) {
     // 等待退出 QThread 的 event loop
     wait();
 }
-···
+```
 
 3、	telegram 的 taskqueue， 对 task 的执行、包括结束，都是在同一个 worker 工作函数里执行的。
 主线程生成 task，加入到 taskqueue，taskqueue 通过信号 taskadded，通知 worker 开始执行任务， worker 从 task 队列取出 task，调用 task->process()，完成后，发出 worker 的 taskFinished 信号，不在同一线程、所以 生成 event 插入到 主线程的 event loop 里，然后主动调用 QCoreApplication::processEvents()，这时候 worker 的 taskFinished 信号会被处理掉，即，一个任务 process 后，立刻 finished。
