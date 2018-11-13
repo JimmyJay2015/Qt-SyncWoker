@@ -93,6 +93,10 @@ quint64 TaskQueue::addTask(Task *t) {
 }
 
 void TaskQueue::cancelTask(quint64 id) {
+    QMutexLocker locaker(&_threadIdleMutex);
+    if (!_worker) {
+        return;
+    }
     _worker->cancelTask(id);
 }
 
